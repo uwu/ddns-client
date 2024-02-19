@@ -1,0 +1,18 @@
+[package]
+name = "ddns-client"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "backends"
+path = "src/backends/mod.rs"
+
+[[bin]]
+name = "ddns-client"
+path = "src/main.rs"
+
+[dependencies]
+reqwest = { version = "0.11.24", features = ["json"] }
+serde = { version = "1.0.196", features = ["derive"] }
+serde_json = "1.0.113"
+tokio = { version = "1.36.0", features = ["macros", "rt-multi-thread"] }
