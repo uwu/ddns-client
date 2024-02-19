@@ -1,12 +1,9 @@
-use backends::configuration::Config;
-use backends::configuration::Record;
-
 use reqwest::Client;
-use serde_json::{from_str, Value};
+use tokio::time::{sleep, Duration};
 
 struct DDNSClient {
     client: Client,
-    config: Config,
+    config: backends::Config,
 }
 
 impl DDNSClient {
@@ -17,33 +14,35 @@ impl DDNSClient {
             std::process::exit(1);
         });
 
-        let config: Config = from_str(&file).unwrap();
+        let config: backends::Config = serde_json::from_str(&file).unwrap();
         Self { client, config }
     }
 
-    async fn get_ip(&self) -> String {
+    async fn get_ip(&self) -> Option<String> {
         let response = self
             .client
             .get("https://api.ipify.org")
             .send()
             .await
             .unwrap();
-        let body = response.text().await.unwrap();
-        let ip = from_str::<Value>(&body).unwrap();
-        ip.as_str().unwrap().to_string()
+        if let Ok(body) = response.text().await {
+            return Some(body); //once told me
+        }
+        None
     }
 
-    async fn retrieve_record(&self) -> Option<Record> {
+    async fn retrieve_record(&self) -> Option<backends::Record> {
         match &self.config {
-            Config::Porkbun { .. } => None,
-            Config::Cloudflare {
-                domain,
+            backends::Config::Porkbun { .. } => None,
+            backends::Config::Cloudflare {
+                subdomain,
                 zone_id,
                 api_key,
+                ..
             } => {
                 return backends::cloudflare::retrieve_record(
                     &self.client,
-                    &domain,
+                    &subdomain,
                     &zone_id,
                     &api_key,
                 )
@@ -52,8 +51,45 @@ impl DDNSClient {
         }
     }
 
-    async fn update_record(&self) -> Option<Record> {
-        Some(Record::default())
+    async fn update_record(
+        &self,
+        record: &backends::Record,
+        new_ip: &String,
+    ) -> Option<backends::Record> {
+        match &self.config {
+            backends::Config::Porkbun {
+                api_key,
+                secret_key,
+                domain,
+            } => {
+                return backends::porkbun::update_record(
+                    &self.client,
+                    domain,
+                    api_key,
+                    secret_key,
+                    record,
+                    &new_ip,
+                )
+                .await;
+            }
+            backends::Config::Cloudflare {
+                zone_id,
+                api_key,
+                domain,
+                subdomain,
+            } => {
+                return backends::cloudflare::update_record(
+                    &self.client,
+                    &domain,
+                    &subdomain,
+                    &zone_id,
+                    &api_key,
+                    record,
+                    &new_ip,
+                )
+                .await;
+            }
+        }
     }
 }
 
@@ -61,23 +97,46 @@ impl DDNSClient {
 async fn main() -> () {
     let arguments = std::env::args().collect::<Vec<String>>();
 
+    println!("ddns-client v{}", env!("CARGO_PKG_VERSION"));
+
     let path = arguments.get(1).unwrap_or_else(|| {
         println!("Usage: ddns-rs <config_path>");
         std::process::exit(1);
     });
 
+    println!("Using config file: {}", path);
+
     let client = DDNSClient::new(&path).await;
 
-    let current_record = client.retrieve_record().await;
-    let current_ip = current_record.unwrap_or_default().content;
+    let mut current_record = client.retrieve_record().await.unwrap_or_default();
+    let mut current_ip = current_record.content.clone();
+
+    println!("Current IP: {}", current_ip);
 
     loop {
+        println!("Checking IP for change...");
         let new_ip = client.get_ip().await;
-        if new_ip != current_ip {
-            current_ip = new_ip;
-            client.update_record().await;
+
+        match new_ip {
+            Some(ip) => {
+                if ip != current_ip {
+                    println!("IP has changed from {} to {}", current_ip, ip);
+
+                    let new_record = client.update_record(&current_record, &ip).await;
+                    match new_record {
+                        Some(record) => {
+                            current_record = record;
+                            current_ip = current_record.content.clone();
+                        }
+                        None => println!("Failed to update record. IP has not been changed, will retry in 60 seconds.")
+                    }
+                } else {
+                    println!("IP has not changed.")
+                }
+            }
+            None => println!("Failed to retrieve IP, will retry in 60 seconds."),
         }
 
-        std::thread::sleep(std::time::Duration::from_secs(60));
+        sleep(Duration::from_secs(60)).await;
     }
 }
