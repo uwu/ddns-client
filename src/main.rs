@@ -93,16 +93,30 @@ impl DDNSClient {
     }
 }
 
+fn get_default_path() -> String {
+    format!(
+        "{}{}.ddns-client.json",
+        home::home_dir().unwrap_or_default().display(),
+        std::path::MAIN_SEPARATOR_STR
+    )
+}
+
 #[tokio::main]
 async fn main() -> () {
     let arguments = std::env::args().collect::<Vec<String>>();
 
     println!("ddns-client v{}", env!("CARGO_PKG_VERSION"));
 
-    let path = arguments.get(1).unwrap_or_else(|| {
-        println!("Usage: ddns-rs <config_path>");
-        std::process::exit(1);
-    });
+    let first_arg = arguments.get(1);
+    let default_path = get_default_path();
+
+    let path = match first_arg {
+        Some(arg) => arg,
+        None => {
+            println!("No custom config path specified, will load from home directory.");
+            &default_path
+        }
+    };
 
     println!("Using config file: {}", path);
 
