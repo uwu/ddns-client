@@ -1,5 +1,6 @@
 use reqwest::Client;
 use tokio::time::{sleep, Duration};
+use tray_item::{IconSource, TrayItem};
 
 struct DDNSClient {
     client: Client,
@@ -62,7 +63,7 @@ impl DDNSClient {
                 secret_key,
                 domain,
             } => {
-                return backends::porkbun::update_record(
+                backends::porkbun::update_record(
                     &self.client,
                     domain,
                     api_key,
@@ -70,7 +71,7 @@ impl DDNSClient {
                     record,
                     &new_ip,
                 )
-                .await;
+                .await
             }
             backends::Config::Cloudflare {
                 zone_id,
@@ -78,7 +79,7 @@ impl DDNSClient {
                 domain,
                 subdomain,
             } => {
-                return backends::cloudflare::update_record(
+                backends::cloudflare::update_record(
                     &self.client,
                     &domain,
                     &subdomain,
@@ -87,18 +88,64 @@ impl DDNSClient {
                     record,
                     &new_ip,
                 )
-                .await;
+                .await
             }
         }
     }
 }
 
-fn get_default_path() -> String {
+fn get_config_dir() -> String {
     format!(
-        "{}{}.ddns-client.json",
+        "{}{}{}{}",
         home::home_dir().unwrap_or_default().display(),
+        std::path::MAIN_SEPARATOR_STR,
+        ".ddns",
         std::path::MAIN_SEPARATOR_STR
     )
+}
+
+#[derive(Debug)]
+enum Status {
+    Running,
+    Stopped,
+}
+
+impl Status {
+    fn from(running: bool) -> Self {
+        if running {
+            Status::Running
+        } else {
+            Status::Stopped
+        }
+    }
+    fn to_string(&self) -> String {
+        match self {
+            Status::Running => "Running".to_string(),
+            Status::Stopped => "Stopped".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ButtonMessage {
+    Start,
+    Stop,
+}
+
+impl ButtonMessage {
+    fn from(running: bool) -> Self {
+        if running {
+            ButtonMessage::Stop
+        } else {
+            ButtonMessage::Start
+        }
+    }
+    fn to_string(&self) -> String {
+        match self {
+            ButtonMessage::Start => "Start client".to_string(),
+            ButtonMessage::Stop => "Stop client".to_string(),
+        }
+    }
 }
 
 #[tokio::main]
@@ -108,17 +155,18 @@ async fn main() -> () {
     println!("ddns-client v{}", env!("CARGO_PKG_VERSION"));
 
     let first_arg = arguments.get(1);
-    let default_path = get_default_path();
+
+    let config_dir = get_config_dir();
 
     let path = match first_arg {
-        Some(arg) => arg,
+        Some(arg) => arg.clone(),
         None => {
             println!("No custom config path specified, will load from home directory.");
-            &default_path
+            format!("{}{}", config_dir, "config.json".to_string())
         }
     };
 
-    println!("Using config file: {}", path);
+    println!("Using user config file: {}", path);
 
     let client = DDNSClient::new(&path).await;
 
@@ -127,30 +175,60 @@ async fn main() -> () {
 
     println!("Current IP: {}", current_ip);
 
-    loop {
-        println!("Checking IP for change...");
-        let new_ip = client.get_ip().await;
+    // TODO: Configurable timeout
+    let timeout = 60;
 
-        match new_ip {
-            Some(ip) => {
-                if ip != current_ip {
-                    println!("IP has changed from {} to {}", current_ip, ip);
+    // spawn a new task to check the IP every 60 seconds
+    tokio::spawn(async move {
+        loop {
+            println!("Checking IP for change...");
+            let new_ip = client.get_ip().await;
 
-                    let new_record = client.update_record(&current_record, &ip).await;
-                    match new_record {
-                        Some(record) => {
-                            current_record = record;
-                            current_ip = current_record.content.clone();
+            match new_ip {
+                Some(ip) => {
+                    if ip != current_ip {
+                        println!("IP has changed from {} to {}", current_ip, ip);
+
+                        let new_record = client.update_record(&current_record, &ip).await;
+                        match new_record {
+                            Some(record) => {
+                                current_record = record;
+                                current_ip = current_record.content.clone();
+                            }
+                            None => println!("Failed to update record. IP has not been changed, will retry in {} seconds.", timeout)
                         }
-                        None => println!("Failed to update record. IP has not been changed, will retry in 60 seconds.")
+                    } else {
+                        println!("IP has not changed.")
                     }
-                } else {
-                    println!("IP has not changed.")
                 }
+                None => println!("Failed to retrieve IP, will retry in {} seconds.", timeout),
             }
-            None => println!("Failed to retrieve IP, will retry in 60 seconds."),
-        }
 
-        sleep(Duration::from_secs(60)).await;
-    }
+            sleep(Duration::from_secs(timeout)).await;
+        }
+    });
+
+    // TODO: Icon?
+    let mut tray = TrayItem::new("DDNS Client", IconSource::Resource("")).unwrap();
+
+    // TODO: Dynamic state - ability to stop and start, display current ip, etc.
+    // Might need events between worker thread and main thread
+
+    let mut running = true;
+
+    tray.add_label(&format!("DDNS Client - {:?}", Status::from(running)))
+        .unwrap();
+
+    let mut inner = tray.inner_mut();
+    // TODO: Figure out better way to handle mutating current ip in another thread
+    // inner
+    //     .add_label(&format!("Current IP: {}", current_ip))
+    //     .unwrap();
+    inner
+        .add_menu_item(&ButtonMessage::from(running).to_string(), || {
+            println!("Toggling client...");
+        })
+        .unwrap();
+    inner.add_quit_item("Quit");
+    inner.display();
 }
