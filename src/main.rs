@@ -1,10 +1,13 @@
 use reqwest::Client;
 use tokio::time::{sleep, Duration};
-use tray_item::{IconSource, TrayItem};
+
+pub mod backends;
+// pub mod tray;
 
 struct DDNSClient {
     client: Client,
     config: backends::Config,
+    timeout: Duration,
 }
 
 impl DDNSClient {
@@ -16,7 +19,23 @@ impl DDNSClient {
         });
 
         let config: backends::Config = serde_json::from_str(&file).unwrap();
-        Self { client, config }
+
+        let timeout = Duration::from_secs(match config {
+            backends::Config::Porkbun {
+                update_every_seconds,
+                ..
+            } => update_every_seconds,
+            backends::Config::Cloudflare {
+                update_every_seconds,
+                ..
+            } => update_every_seconds,
+        });
+
+        Self {
+            client,
+            config,
+            timeout,
+        }
     }
 
     async fn get_ip(&self) -> Option<String> {
@@ -62,6 +81,7 @@ impl DDNSClient {
                 api_key,
                 secret_key,
                 domain,
+                ..
             } => {
                 backends::porkbun::update_record(
                     &self.client,
@@ -78,6 +98,7 @@ impl DDNSClient {
                 api_key,
                 domain,
                 subdomain,
+                ..
             } => {
                 backends::cloudflare::update_record(
                     &self.client,
@@ -102,50 +123,6 @@ fn get_config_dir() -> String {
         ".ddns",
         std::path::MAIN_SEPARATOR_STR
     )
-}
-
-#[derive(Debug)]
-enum Status {
-    Running,
-    Stopped,
-}
-
-impl Status {
-    fn from(running: bool) -> Self {
-        if running {
-            Status::Running
-        } else {
-            Status::Stopped
-        }
-    }
-    fn to_string(&self) -> String {
-        match self {
-            Status::Running => "Running".to_string(),
-            Status::Stopped => "Stopped".to_string(),
-        }
-    }
-}
-
-#[derive(Debug)]
-enum ButtonMessage {
-    Start,
-    Stop,
-}
-
-impl ButtonMessage {
-    fn from(running: bool) -> Self {
-        if running {
-            ButtonMessage::Stop
-        } else {
-            ButtonMessage::Start
-        }
-    }
-    fn to_string(&self) -> String {
-        match self {
-            ButtonMessage::Start => "Start client".to_string(),
-            ButtonMessage::Stop => "Stop client".to_string(),
-        }
-    }
 }
 
 #[tokio::main]
@@ -173,62 +150,30 @@ async fn main() -> () {
     let mut current_record = client.retrieve_record().await.unwrap_or_default();
     let mut current_ip = current_record.content.clone();
 
-    println!("Current IP: {}", current_ip);
+    loop {
+        println!("Checking IP for change...");
+        let new_ip = client.get_ip().await;
 
-    // TODO: Configurable timeout
-    let timeout = 60;
+        match new_ip {
+            Some(ip) => {
+                if ip != current_ip {
+                    println!("IP has changed from {} to {}", current_ip, ip);
 
-    // spawn a new task to check the IP every 60 seconds
-    tokio::spawn(async move {
-        loop {
-            println!("Checking IP for change...");
-            let new_ip = client.get_ip().await;
-
-            match new_ip {
-                Some(ip) => {
-                    if ip != current_ip {
-                        println!("IP has changed from {} to {}", current_ip, ip);
-
-                        let new_record = client.update_record(&current_record, &ip).await;
-                        match new_record {
-                            Some(record) => {
-                                current_record = record;
-                                current_ip = current_record.content.clone();
-                            }
-                            None => println!("Failed to update record. IP has not been changed, will retry in {} seconds.", timeout)
+                    let new_record = client.update_record(&current_record, &ip).await;
+                    match new_record {
+                        Some(record) => {
+                            current_record = record;
+                            current_ip = current_record.content.clone();
                         }
-                    } else {
-                        println!("IP has not changed.")
+                        None => println!("Failed to update record. IP has not been changed."),
                     }
+                } else {
+                    println!("IP has not changed.")
                 }
-                None => println!("Failed to retrieve IP, will retry in {} seconds.", timeout),
             }
-
-            sleep(Duration::from_secs(timeout)).await;
+            None => println!("Failed to retrieve IP"),
         }
-    });
 
-    // TODO: Icon?
-    let mut tray = TrayItem::new("DDNS Client", IconSource::Resource("")).unwrap();
-
-    // TODO: Dynamic state - ability to stop and start, display current ip, etc.
-    // Might need events between worker thread and main thread
-
-    let mut running = true;
-
-    tray.add_label(&format!("DDNS Client - {:?}", Status::from(running)))
-        .unwrap();
-
-    let mut inner = tray.inner_mut();
-    // TODO: Figure out better way to handle mutating current ip in another thread
-    // inner
-    //     .add_label(&format!("Current IP: {}", current_ip))
-    //     .unwrap();
-    inner
-        .add_menu_item(&ButtonMessage::from(running).to_string(), || {
-            println!("Toggling client...");
-        })
-        .unwrap();
-    inner.add_quit_item("Quit");
-    inner.display();
+        sleep(client.timeout).await;
+    }
 }

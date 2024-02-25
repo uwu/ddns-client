@@ -1,4 +1,4 @@
-use crate::Record;
+use crate::backends::Record;
 use reqwest::Client;
 
 const API_ENDPOINT: &str = "https://api.cloudflare.com/client/v4";

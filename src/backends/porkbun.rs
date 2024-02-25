@@ -1,4 +1,4 @@
-use crate::Record;
+use crate::backends::Record;
 use reqwest::Client;
 use serde_json::json;
 

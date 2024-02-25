@@ -10,12 +10,14 @@ pub enum Config {
         api_key: String,
         secret_key: String,
         domain: String,
+        update_every_seconds: u64,
     },
     Cloudflare {
         zone_id: String,
         api_key: String,
         domain: String,
         subdomain: String,
+        update_every_seconds: u64,
     },
 }
 
