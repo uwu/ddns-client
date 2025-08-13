@@ -21,10 +21,10 @@ pub async fn retrieve_record(
     let json = response
         .send()
         .await
-        .unwrap()
+        .ok()?
         .json::<serde_json::Value>()
         .await
-        .unwrap();
+        .ok()?;
 
     if json["status"].as_str().unwrap() != "SUCCESS" {
         return None;
@@ -65,10 +65,10 @@ async fn retrieve_record_with_id(
     let json = response
         .send()
         .await
-        .unwrap()
+        .ok()?
         .json::<serde_json::Value>()
         .await
-        .unwrap();
+        .ok()?;
 
     if json["status"].as_str().unwrap() != "SUCCESS" {
         return None;

@@ -1,8 +1,9 @@
+use flexi_logger::{Age, Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
+use log::{error, info, warn};
 use reqwest::Client;
 use tokio::time::{sleep, Duration};
 
 pub mod backends;
-// pub mod tray;
 
 struct DDNSClient {
     client: Client,
@@ -14,22 +15,13 @@ impl DDNSClient {
     async fn new(config_path: &String) -> Self {
         let client = Client::new();
         let file = std::fs::read_to_string(config_path).unwrap_or_else(|err| {
-            println!("Error reading file: {}", err);
+            error!("Error reading file: {}", err);
             std::process::exit(1);
         });
 
         let config: backends::Config = serde_json::from_str(&file).unwrap();
 
-        let timeout = Duration::from_secs(match config {
-            backends::Config::Porkbun {
-                update_every_seconds,
-                ..
-            } => update_every_seconds,
-            backends::Config::Cloudflare {
-                update_every_seconds,
-                ..
-            } => update_every_seconds,
-        });
+        let timeout = Duration::from_secs(config.update_every_seconds);
 
         Self {
             client,
@@ -39,12 +31,8 @@ impl DDNSClient {
     }
 
     async fn get_ip(&self) -> Option<String> {
-        let response = self
-            .client
-            .get("https://api.ipify.org")
-            .send()
-            .await
-            .unwrap();
+        let response = self.client.get("https://api.ipify.org").send().await.ok()?;
+
         if let Ok(body) = response.text().await {
             return Some(body); //once told me
         }
@@ -52,9 +40,9 @@ impl DDNSClient {
     }
 
     async fn retrieve_record(&self) -> Option<backends::Record> {
-        match &self.config {
-            backends::Config::Porkbun { .. } => None,
-            backends::Config::Cloudflare {
+        match &self.config.backend {
+            backends::BackendConfig::Porkbun { .. } => None,
+            backends::BackendConfig::Cloudflare {
                 subdomain,
                 zone_id,
                 api_key,
@@ -76,8 +64,8 @@ impl DDNSClient {
         record: &backends::Record,
         new_ip: &String,
     ) -> Option<backends::Record> {
-        match &self.config {
-            backends::Config::Porkbun {
+        match &self.config.backend {
+            backends::BackendConfig::Porkbun {
                 api_key,
                 secret_key,
                 domain,
@@ -93,7 +81,7 @@ impl DDNSClient {
                 )
                 .await
             }
-            backends::Config::Cloudflare {
+            backends::BackendConfig::Cloudflare {
                 zone_id,
                 api_key,
                 domain,
@@ -129,7 +117,25 @@ fn get_config_dir() -> String {
 async fn main() -> () {
     let arguments = std::env::args().collect::<Vec<String>>();
 
-    println!("ddns-client v{}", env!("CARGO_PKG_VERSION"));
+    Logger::try_with_str("info")
+        .unwrap()
+        .log_to_file(
+            FileSpec::default()
+                .directory("/var/log") // Where logs go
+                .basename("ddns-client") // ddns-client.log
+                .suffix("log"), // Extension
+        )
+        .duplicate_to_stdout(Duplicate::All)
+        .rotate(
+            Criterion::AgeOrSize(Age::Day, 10_000_000),
+            Naming::Timestamps,       // Timestamp old logs
+            Cleanup::KeepLogFiles(7), // Keep last 7 log files
+        )
+        .format(flexi_logger::detailed_format) // Timestamp + level + message
+        .start()
+        .unwrap();
+
+    info!("ddns-client v{}", env!("CARGO_PKG_VERSION"));
 
     let first_arg = arguments.get(1);
 
@@ -138,12 +144,12 @@ async fn main() -> () {
     let path = match first_arg {
         Some(arg) => arg.clone(),
         None => {
-            println!("No custom config path specified, will load from home directory.");
+            warn!("No custom config path specified, will load from home directory.");
             format!("{}{}", config_dir, "config.json".to_string())
         }
     };
 
-    println!("Using user config file: {}", path);
+    info!("Using user config file: {}", path);
 
     let client = DDNSClient::new(&path).await;
 
@@ -151,13 +157,13 @@ async fn main() -> () {
     let mut current_ip = current_record.content.clone();
 
     loop {
-        println!("Checking IP for change...");
+        info!("Checking IP for change...");
         let new_ip = client.get_ip().await;
 
         match new_ip {
             Some(ip) => {
                 if ip != current_ip {
-                    println!("IP has changed from {} to {}", current_ip, ip);
+                    info!("IP has changed from {} to {}", current_ip, ip);
 
                     let new_record = client.update_record(&current_record, &ip).await;
                     match new_record {
@@ -165,13 +171,13 @@ async fn main() -> () {
                             current_record = record;
                             current_ip = current_record.content.clone();
                         }
-                        None => println!("Failed to update record. IP has not been changed."),
+                        None => error!("Failed to update record. IP has not been changed."),
                     }
                 } else {
-                    println!("IP has not changed.")
+                    info!("IP has not changed.")
                 }
             }
-            None => println!("Failed to retrieve IP"),
+            None => error!("Failed to retrieve IP"),
         }
 
         sleep(client.timeout).await;
