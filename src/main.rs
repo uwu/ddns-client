@@ -1,4 +1,4 @@
-use flexi_logger::{Age, Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
+use flexi_logger::Logger;
 use log::{error, info, warn};
 use reqwest::Client;
 use tokio::time::{sleep, Duration};
@@ -12,7 +12,7 @@ struct DDNSClient {
 }
 
 impl DDNSClient {
-    async fn new(config_path: &String) -> Self {
+    async fn new(config_path: &str) -> Self {
         let client = Client::new();
         let file = std::fs::read_to_string(config_path).unwrap_or_else(|err| {
             error!("Error reading file: {}", err);
@@ -50,9 +50,9 @@ impl DDNSClient {
             } => {
                 return backends::cloudflare::retrieve_record(
                     &self.client,
-                    &subdomain,
-                    &zone_id,
-                    &api_key,
+                    subdomain,
+                    zone_id,
+                    api_key,
                 )
                 .await;
             }
@@ -62,7 +62,7 @@ impl DDNSClient {
     async fn update_record(
         &self,
         record: &backends::Record,
-        new_ip: &String,
+        new_ip: &str,
     ) -> Option<backends::Record> {
         match &self.config.backend {
             backends::BackendConfig::Porkbun {
@@ -77,7 +77,7 @@ impl DDNSClient {
                     api_key,
                     secret_key,
                     record,
-                    &new_ip,
+                    new_ip,
                 )
                 .await
             }
@@ -90,12 +90,12 @@ impl DDNSClient {
             } => {
                 backends::cloudflare::update_record(
                     &self.client,
-                    &domain,
-                    &subdomain,
-                    &zone_id,
-                    &api_key,
+                    domain,
+                    subdomain,
+                    zone_id,
+                    api_key,
                     record,
-                    &new_ip,
+                    new_ip,
                 )
                 .await
             }
@@ -114,24 +114,13 @@ fn get_config_dir() -> String {
 }
 
 #[tokio::main]
-async fn main() -> () {
+async fn main() {
     let arguments = std::env::args().collect::<Vec<String>>();
 
     Logger::try_with_str("info")
         .unwrap()
-        .log_to_file(
-            FileSpec::default()
-                .directory("/var/log") // Where logs go
-                .basename("ddns-client") // ddns-client.log
-                .suffix("log"), // Extension
-        )
-        .duplicate_to_stdout(Duplicate::All)
-        .rotate(
-            Criterion::AgeOrSize(Age::Day, 10_000_000),
-            Naming::Timestamps,       // Timestamp old logs
-            Cleanup::KeepLogFiles(7), // Keep last 7 log files
-        )
-        .format(flexi_logger::detailed_format) // Timestamp + level + message
+        .log_to_stdout()
+        .format(flexi_logger::detailed_format)
         .start()
         .unwrap();
 
@@ -145,7 +134,7 @@ async fn main() -> () {
         Some(arg) => arg.clone(),
         None => {
             warn!("No custom config path specified, will load from home directory.");
-            format!("{}{}", config_dir, "config.json".to_string())
+            format!("{}config.json", config_dir)
         }
     };
 

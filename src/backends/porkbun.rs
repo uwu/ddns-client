@@ -32,20 +32,20 @@ pub async fn retrieve_record(
 
     let records = json["records"].as_array().unwrap();
 
-    match records.iter().find(|record| {
-        record["name"]
-            .as_str()
-            .unwrap()
-            .starts_with(&format!("{}.", subdomain))
-    }) {
-        Some(record) => Some(Record {
+    records
+        .iter()
+        .find(|record| {
+            record["name"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("{}.", subdomain))
+        })
+        .map(|record| Record {
             id: record["id"].as_str().unwrap().to_string(),
             name: record["name"].as_str().unwrap().to_string(),
             record_type: record["type"].as_str().unwrap().to_string(),
             content: record["content"].as_str().unwrap().to_string(),
-        }),
-        None => None,
-    }
+        })
 }
 
 async fn retrieve_record_with_id(
@@ -74,17 +74,16 @@ async fn retrieve_record_with_id(
         return None;
     }
 
-    let record = json["record"].as_array().unwrap().get(0);
-
-    match record {
-        None => None,
-        Some(record) => Some(Record {
+    json["record"]
+        .as_array()
+        .unwrap()
+        .first()
+        .map(|record| Record {
             id: record["id"].as_str().unwrap().to_string(),
             name: record["name"].as_str().unwrap().to_string(),
             record_type: record["type"].as_str().unwrap().to_string(),
             content: record["content"].as_str().unwrap().to_string(),
-        }),
-    }
+        })
 }
 
 pub async fn update_record(

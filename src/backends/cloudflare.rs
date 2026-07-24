@@ -29,20 +29,20 @@ pub async fn retrieve_record(
 
     let records = json["result"].as_array().unwrap();
 
-    match records.iter().find(|record| {
-        record["name"]
-            .as_str()
-            .unwrap()
-            .starts_with(&format!("{}.", subdomain))
-    }) {
-        Some(record) => Some(Record {
+    records
+        .iter()
+        .find(|record| {
+            record["name"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("{}.", subdomain))
+        })
+        .map(|record| Record {
             id: record["id"].as_str().unwrap().to_string(),
             name: record["name"].as_str().unwrap().to_string(),
             record_type: record["type"].as_str().unwrap().to_string(),
             content: record["content"].as_str().unwrap().to_string(),
-        }),
-        None => None,
-    }
+        })
 }
 
 pub async fn update_record(
