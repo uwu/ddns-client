@@ -8,6 +8,7 @@ pub async fn retrieve_record(
     subdomain: &str,
     zone_id: &str,
     api_key: &str,
+    record_type: &str,
 ) -> Option<Record> {
     let url = format!("{}/zones/{}/dns_records", API_ENDPOINT, zone_id);
 
@@ -36,6 +37,7 @@ pub async fn retrieve_record(
                 .as_str()
                 .unwrap()
                 .starts_with(&format!("{}.", subdomain))
+                && record["type"].as_str().unwrap() == record_type
         })
         .map(|record| Record {
             id: record["id"].as_str().unwrap().to_string(),

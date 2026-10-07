@@ -10,6 +10,7 @@ pub async fn retrieve_record(
     subdomain: &str,
     api_key: &str,
     secret_key: &str,
+    record_type: &str,
 ) -> Option<Record> {
     let url = format!("{}/retrieve/{}", API_ENDPOINT, domain);
 
@@ -39,6 +40,7 @@ pub async fn retrieve_record(
                 .as_str()
                 .unwrap()
                 .starts_with(&format!("{}.", subdomain))
+                && record["type"].as_str().unwrap() == record_type
         })
         .map(|record| Record {
             id: record["id"].as_str().unwrap().to_string(),

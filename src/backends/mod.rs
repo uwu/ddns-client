@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     pub update_every_seconds: u64,
+    #[serde(default)]
+    pub disable_ipv6: bool,
     #[serde(flatten)]
     pub backend: BackendConfig,
 }
