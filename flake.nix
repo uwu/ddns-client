@@ -37,6 +37,42 @@
         package = self.packages.${system}.default;
       });
 
+      nixosModules.default =
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
+        let
+          cfg = config.services.ddns-client;
+        in
+        {
+          options.services.ddns-client = {
+            enable = lib.mkEnableOption "ddns-client";
+            package = lib.mkPackageOption pkgs "ddns-client" { };
+            configFile = lib.mkOption {
+              type = lib.types.path;
+              description = "Path to the JSON config file.";
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            systemd.services.ddns-client = {
+              description = "Dynamic DNS client";
+              wantedBy = [ "multi-user.target" ];
+              after = [ "network-online.target" ];
+              wants = [ "network-online.target" ];
+              serviceConfig = {
+                DynamicUser = true;
+                LoadCredential = "config.json:${cfg.configFile}";
+                ExecStart = "${lib.getExe cfg.package} %d/config.json";
+                Restart = "always";
+              };
+            };
+          };
+        };
+
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-tree);
     };
 }
