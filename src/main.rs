@@ -30,8 +30,8 @@ impl DDNSClient {
         }
     }
 
-    async fn get_ip(&self) -> Option<String> {
-        let response = self.client.get("https://api.ipify.org").send().await.ok()?;
+    async fn get_ip(&self, url: &str) -> Option<String> {
+        let response = self.client.get(url).send().await.ok()?;
 
         if let Ok(body) = response.text().await {
             return Some(body); //once told me
@@ -39,7 +39,7 @@ impl DDNSClient {
         None
     }
 
-    async fn retrieve_record(&self) -> Option<backends::Record> {
+    async fn retrieve_record(&self, record_type: &str) -> Option<backends::Record> {
         match &self.config.backend {
             backends::BackendConfig::Porkbun { .. } => None,
             backends::BackendConfig::Cloudflare {
@@ -53,9 +53,28 @@ impl DDNSClient {
                     subdomain,
                     zone_id,
                     api_key,
+                    record_type,
                 )
                 .await;
             }
+        }
+    }
+
+    async fn check_and_update(&self, url: &str, record_type: &str, state: &mut IpState) {
+        info!("Checking {} IP for change...", record_type);
+        match self.get_ip(url).await {
+            Some(ip) if ip != state.ip => {
+                info!("IP has changed from {} to {}", state.ip, ip);
+                match self.update_record(&state.record, &ip).await {
+                    Some(record) => {
+                        state.ip = record.content.clone();
+                        state.record = record;
+                    }
+                    None => error!("Failed to update record. IP has not been changed."),
+                }
+            }
+            Some(_) => info!("IP has not changed."),
+            None => error!("Failed to retrieve IP"),
         }
     }
 
@@ -103,6 +122,11 @@ impl DDNSClient {
     }
 }
 
+struct IpState {
+    record: backends::Record,
+    ip: String,
+}
+
 fn get_config_dir() -> String {
     format!(
         "{}{}{}{}",
@@ -142,31 +166,44 @@ async fn main() {
 
     let client = DDNSClient::new(&path).await;
 
-    let mut current_record = client.retrieve_record().await.unwrap_or_default();
-    let mut current_ip = current_record.content.clone();
+    let mut v4_state = match client.retrieve_record("A").await {
+        Some(record) => Some(IpState {
+            ip: record.content.clone(),
+            record,
+        }),
+        None => {
+            warn!("No A record found, skipping IPv4 updates.");
+            None
+        }
+    };
+
+    let mut v6_state = if client.config.disable_ipv6 {
+        info!("IPv6 disabled via config.");
+        None
+    } else {
+        match client.retrieve_record("AAAA").await {
+            Some(record) => Some(IpState {
+                ip: record.content.clone(),
+                record,
+            }),
+            None => {
+                warn!("No AAAA record found, skipping IPv6 updates.");
+                None
+            }
+        }
+    };
 
     loop {
-        info!("Checking IP for change...");
-        let new_ip = client.get_ip().await;
+        if let Some(state) = v4_state.as_mut() {
+            client
+                .check_and_update("https://api4.ipify.org", "A", state)
+                .await;
+        }
 
-        match new_ip {
-            Some(ip) => {
-                if ip != current_ip {
-                    info!("IP has changed from {} to {}", current_ip, ip);
-
-                    let new_record = client.update_record(&current_record, &ip).await;
-                    match new_record {
-                        Some(record) => {
-                            current_record = record;
-                            current_ip = current_record.content.clone();
-                        }
-                        None => error!("Failed to update record. IP has not been changed."),
-                    }
-                } else {
-                    info!("IP has not changed.")
-                }
-            }
-            None => error!("Failed to retrieve IP"),
+        if let Some(state) = v6_state.as_mut() {
+            client
+                .check_and_update("https://api6.ipify.org", "AAAA", state)
+                .await;
         }
 
         sleep(client.timeout).await;
